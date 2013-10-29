@@ -39,6 +39,13 @@ extern "C" {
 #include "konoha3/platform.h"
 #include "konoha3/libcode/minishell.h"
 
+#define CallInitKonoha() CallKonoha('i', NULL, NULL)
+#define CallEvalKonoha(in, out) CallKonoha('e', (in), (out))
+#define CallKillKonoha() CallKonoha('k', NULL, NULL)
+static int CallKonoha(char mode, char* input, char* output);
+static KonohaContext* CallKonoha_Init(KBuffer* wb);
+static void CallKonoha_Eval(KonohaContext* kctx, KBuffer* wb, char* input, char* output);
+static int CallKonoha_Kill(KonohaContext* kctx, KBuffer* wb);
 // -------------------------------------------------------------------------
 // getopt
 
@@ -221,7 +228,42 @@ static kbool_t Konoha_ParseCommandOption(KonohaContext* kctx, int argc, char **a
 // -------------------------------------------------------------------------
 // ** main **
 
-int main(int argc, char *argv[])
+int main()
+{
+	CallInitKonoha();
+
+	char output[256];
+
+	CallEvalKonoha("1*(2-1);", output);
+	printf("%s\n", output);
+
+	CallEvalKonoha("1==1;", output);
+	printf("%s\n", output);
+
+	CallEvalKonoha("x=1;", output);
+	printf("%s\n", output);
+
+	return CallKillKonoha();
+}
+
+static int CallKonoha(char mode, char* input, char* output)
+{
+	static KonohaContext* kctx;
+	static KBuffer wb; 
+
+	switch (mode) {
+		case 'i':
+			kctx = CallKonoha_Init(&wb);
+			break;
+		case 'e':
+			CallKonoha_Eval(kctx, &wb, input, output);
+			break;
+		case 'k':
+			return CallKonoha_Kill(kctx, &wb);
+	}
+	return 0;
+}
+static KonohaContext* CallKonoha_Init(KBuffer* wb)
 {
 	struct KonohaFactory factory = {};
 	if(getenv("KONOHA_DEBUG") != NULL) {
@@ -229,11 +271,160 @@ int main(int argc, char *argv[])
 		factory.verbose_sugar = 1;
 		factory.verbose_code = 1;
 	}
-	KonohaFactory_SetDefaultFactory(&factory, PosixFactory, argc, argv);
-	KonohaContext* konoha = KonohaFactory_CreateKonoha(&factory);
-	Konoha_ParseCommandOption(konoha, argc, argv);
-	return Konoha_Destroy(konoha);
+	KonohaFactory_SetDefaultFactory(&factory, PosixFactory, 0, NULL);
+	KonohaContext* kctx = KonohaFactory_CreateKonoha(&factory);
+
+	KBaseTrace(trace);
+	CommandLine_SetARGV(kctx, 0, NULL, trace);
+	interactive_flag = 1;
+	KonohaContext_Set(Interactive, kctx);
+	CommandLine_Import(kctx, "Konoha.Man", trace);
+
+	KLIB KBuffer_Init(&(kctx->stack->cwb), wb);
+
+	return kctx;
 }
+static void CallKonoha_Eval(KonohaContext* kctx, KBuffer* wb, char* input, char* output)
+{
+	memset(output, '\0', strlen(output)); 
+	kstatus_t status = K_CONTINUE;
+
+	KLIB KBuffer_Write(kctx, wb, input, strlen(input));
+	//CheckNode(KLIB KBuffer_text(kctx, wb, NonZero), KBuffer_bytesize(wb)) > 0
+
+	if(KBuffer_bytesize(wb) > 0) {
+		//PLATAPI add_history_i(KLIB KBuffer_text(kctx, wb, EnsureZero));
+
+		status = (kstatus_t)Konoha_Eval((KonohaContext *)kctx, KLIB KBuffer_text(kctx, wb, EnsureZero), 0);
+		KLIB KBuffer_Free(wb);
+		if(status != K_FAILED) {
+			KRuntimeContextVar *base = kctx->stack;
+			ktypeattr_t ty = base->evalty;
+			if(ty != KType_void) {
+				KonohaStack *lsfp = base->stack + base->evalidx;
+				if(!KType_Is(UnboxType, ty)) {
+					ty = kObject_typeId(lsfp[0].asObject);
+				}   
+				KClass_(ty)->format(kctx, lsfp, 0, wb);
+				//PLATAPI printf_i("  (%s) %s\n", KType_text(ty), KLIB KBuffer_text(kctx, wb, EnsureZero));
+				strcpy(output, KLIB KBuffer_text(kctx, wb, EnsureZero));
+				base->evalty = KType_void;
+			}   
+			KLIB KBuffer_Free(wb);
+		}
+	}
+	return;
+}
+static int CallKonoha_Kill(KonohaContext* kctx, KBuffer* wb)
+{
+	KLIB KBuffer_Free(wb);
+	//PLATAPI printf_i("\n");
+
+	return Konoha_Destroy(kctx);
+}
+
+/* int main()
+{
+	CallKonoha('i', NULL);
+	CallKonoha('e', "1;");
+
+	return CallKonoha('k', NULL);
+}
+
+static int CallKonoha(char mode, char* input)
+{
+	static KonohaContext* kctx;
+	static KBuffer wb; 
+	static kfileline_t uline;
+
+	switch (mode) {
+		case 'i':
+			kctx = CallKonoha_Init(&wb, &uline);
+			break;
+		case 'e':
+			CallKonoha_Eval(kctx, &wb, &uline, input);
+			break;
+		case 'k':
+			return CallKonoha_Kill(kctx, &wb);
+	}
+	return 0;
+}
+
+
+static KonohaContext* CallKonoha_Init(KBuffer* wb, kfileline_t* uline)
+{
+	struct KonohaFactory factory = {};
+	if(getenv("KONOHA_DEBUG") != NULL) {
+		factory.verbose_debug = 1;
+		factory.verbose_sugar = 1;
+		factory.verbose_code = 1;
+	}
+	KonohaFactory_SetDefaultFactory(&factory, PosixFactory, 0, NULL);
+	KonohaContext* kctx = KonohaFactory_CreateKonoha(&factory);
+
+	KBaseTrace(trace);
+	CommandLine_SetARGV(kctx, 0, NULL, trace);
+	interactive_flag = 1;
+	KonohaContext_Set(Interactive, kctx);
+	CommandLine_Import(kctx, "Konoha.Man", trace);
+
+	KLIB KBuffer_Init(&(kctx->stack->cwb), wb);
+	*uline = FILEID_("(shell)") | 1;
+
+	return kctx;
+}
+static void CallKonoha_Eval(KonohaContext* kctx, KBuffer* wb, kfileline_t* uline, char* input)
+{
+	kfileline_t inc = 0;
+	int line = 1;
+	kstatus_t status = K_CONTINUE;
+	while(1) {
+		int check;
+		char *ln = PLATAPI readline_i(line == 1 ? ">>> " : "	");
+		if(ln == NULL) {
+			KLIB KBuffer_Free(wb);
+			status = K_BREAK;
+			break;
+		}
+		if(line > 1) {
+			KLIB KBuffer_Write(kctx, wb, "\n", 1);
+		}
+		KLIB KBuffer_Write(kctx, wb, ln, strlen(ln));
+		free(ln);
+		if((check = CheckNode(KLIB KBuffer_text(kctx, wb, NonZero), KBuffer_bytesize(wb))) > 0) {
+			inc++;
+			line++;
+			continue;
+		}
+		if(check < 0) {
+			PLATAPI printf_i("(Cancelled)...\n");
+			KLIB KBuffer_Free(wb);
+		}
+		break;
+	}
+	if(KBuffer_bytesize(wb) > 0) {
+		PLATAPI add_history_i(KLIB KBuffer_text(kctx, wb, EnsureZero));
+	}
+	fflush(stdout);
+	inc++;
+	if(status == K_CONTINUE && KBuffer_bytesize(wb) > 0) {
+		status = (kstatus_t)Konoha_Eval((KonohaContext *)kctx, KLIB KBuffer_text(kctx, wb, EnsureZero), *uline);
+		*uline += inc;
+		KLIB KBuffer_Free(wb);
+		if(status != K_FAILED) {
+			DumpEval(kctx, wb);
+			KLIB KBuffer_Free(wb);
+		}   
+	}
+	return;
+}
+static int CallKonoha_Kill(KonohaContext* kctx, KBuffer* wb)
+{
+	KLIB KBuffer_Free(wb);
+	PLATAPI printf_i("\n");
+
+	return Konoha_Destroy(kctx);
+} */
 
 #ifdef __cplusplus
 }
