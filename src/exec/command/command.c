@@ -39,11 +39,14 @@ extern "C" {
 #include "konoha3/platform.h"
 #include "konoha3/libcode/minishell.h"
 
+#include "src/byteloader/loader.c"
+
 // -------------------------------------------------------------------------
 // getopt
 
 static int compileonly_flag = 0;
 static int interactive_flag = 0;
+static int byteload_flag = 0;
 
 // -------------------------------------------------------------------------
 // KonohaContext
@@ -149,7 +152,7 @@ static kbool_t Konoha_ParseCommandOption(KonohaContext* kctx, int argc, char **a
 
 	while(1) {
 		int option_index = 0;
-		int c = getopt_long (argc, argv, "icqD:I:M:S:f:", long_options2, &option_index);
+		int c = getopt_long (argc, argv, "icqbD:I:M:S:f:", long_options2, &option_index);
 		if(c == -1) break; /* Detect the end of the options. */
 		switch (c) {
 
@@ -168,6 +171,11 @@ static kbool_t Konoha_ParseCommandOption(KonohaContext* kctx, int argc, char **a
 		case 'q': {
 			fprintf(stdout, "%s-%lu\n", K_VERSION, (long unsigned)K_DATE);
 			KExit(EXIT_SUCCESS);  //
+		}
+		break;
+
+		case 'b': {
+			byteload_flag = 1;
 		}
 		break;
 
@@ -205,6 +213,10 @@ static kbool_t Konoha_ParseCommandOption(KonohaContext* kctx, int argc, char **a
 	scriptidx = optind;
 	CommandLine_SetARGV(kctx, argc - scriptidx, argv + scriptidx, trace);
 	if(scriptidx < argc) {
+		if(byteload_flag) {
+			LoadByteCode(kctx, argv[scriptidx]);
+			return true;
+		}
 		ret = Konoha_LoadScript(kctx, argv[scriptidx]);
 	}
 	else {
